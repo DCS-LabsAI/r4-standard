@@ -1,0 +1,10 @@
+{
+  "circuit_id": "r4-threshold-count-v1",
+  "bundle_root": "21884686634239027180729461463422748518722327019522922008698788732006243215520",
+  "period_start": "2026-01-01T00:00:00Z",
+  "period_end": "2026-03-31T23:59:59Z",
+  "threshold": 3,
+  "policy_id": "3",
+  "amount_cap_usd_cents": 500,
+  "issuer_id": "did:dcs:r4-test-issuer"
+}

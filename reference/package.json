@@ -1,0 +1,24 @@
+{
+  "name": "r4-reference",
+  "private": true,
+  "version": "0.1.0",
+  "description": "R+4 Federated Zero-Knowledge Verification — reference implementation",
+  "scripts": {
+    "build": "bash build.sh dev",
+    "prove": "tsx prover/prove.ts",
+    "verify": "tsx verifier/verify.ts",
+    "test": "node test/witness-test.mjs",
+    "gen-example": "node scripts/gen-example-bundle.mjs"
+  },
+  "dependencies": {
+    "circomlib": "^2.0.5",
+    "circomlibjs": "^0.1.7",
+    "json-canonicalize": "^1.0.6",
+    "snarkjs": "^0.7.4",
+    "solc": "^0.8.35",
+    "viem": "^2.50.4"
+  },
+  "devDependencies": {
+    "tsx": "^4.16.0"
+  }
+}

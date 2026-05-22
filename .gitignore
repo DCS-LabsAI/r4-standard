@@ -1,0 +1,7 @@
+node_modules/
+.DS_Store
+reference/artifacts/
+reference/build/
+reference/*.ptau
+*.zkey
+*.log

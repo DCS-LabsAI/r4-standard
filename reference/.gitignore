@@ -1,0 +1,8 @@
+# Build + proof artifacts — all regenerable via build.sh / npm run prove.
+# Never commit these: artifacts/ and the ptau run to multiple GB.
+node_modules/
+artifacts/
+ceremony/*.ptau
+ceremony/*.zkey
+proof.json
+solidity/Groth16Verifier.gen.sol
