@@ -66,27 +66,44 @@ Expected: the witness suite passes `7/7`, and the verifier prints
 `groth16 verify : valid`.
 
 > **Trust note.** `npm run build` produces **development proving/verifying
-> keys** from a single-party setup. They are correct for testing the circuit,
-> the proof pipeline, and the on-chain verifier — but they are **not**
-> production-trust keys. Production keys come from a multi-party trusted-setup
-> ceremony (see `reference/ceremony/`). Until that ceremony runs, every R+4
-> proof in this repo is a **dev-key proof** and must be described as such.
+> keys** from a single-party setup — fine for testing the circuit and pipeline.
+> The **production keys** come from the multi-party trusted-setup ceremony,
+> which has now been completed — see
+> [`reference/ceremony/CEREMONY_TRANSCRIPT.md`](reference/ceremony/CEREMONY_TRANSCRIPT.md).
+> The production keys are a **v0.1 ceremony** (5 contributors, family +
+> internal) — verified `ZKey Ok!`, Bitcoin-beacon sealed.
 
 ---
 
-## On-chain verifier — reference deployment
+## On-chain verifiers
 
-`build.sh` emits a Groth16 Solidity verifier (`reference/solidity/`). It was
-deployed to **Base Sepolia** and its `verifyProof()` was called on-chain with
-the real proof — it returned **`true`**.
+### Testnet — Base Sepolia (development keys)
+
+The dev-key Groth16 Solidity verifier was deployed to Base Sepolia and its
+`verifyProof()` returned **`true`** on-chain.
 
 | Item | Value |
 |---|---|
 | Network | Base Sepolia (testnet), chain ID 84532 |
 | Verifier contract | [`0x91d98bc1…0553e1cd`](https://sepolia.basescan.org/address/0x91d98bc1bf053a53de173be055bf67190553e1cd) |
 | Deployment tx | [`0x31e7a6b2…1617609e7`](https://sepolia.basescan.org/tx/0x31e7a6b29ebb1d58b0220fc2d4b242e18eec1ae067d73da9944edab1617609e7) |
-| Block | 41,834,124 |
-| Keys | development keys — testnet only |
+| Keys | development keys |
+
+### Mainnet — Base (production / ceremony keys)
+
+The **production** Groth16 verifier, built from the completed ceremony's
+`phase2_final.zkey`, is live on Base mainnet.
+
+| Item | Value |
+|---|---|
+| Network | Base mainnet, chain ID 8453 |
+| Verifier contract | [`0xabf8626c20e6bf21a9fdcd4e9f80c17ac8963209`](https://basescan.org/address/0xabf8626c20e6bf21a9fdcd4e9f80c17ac8963209) |
+| Deployment tx | [`0x9df6edff…02f01f53f`](https://basescan.org/tx/0x9df6edff61e9c63f25fbb1247a77a0f74cea128bb5a99427ea4bea902f01f53f) |
+| Block | 46,343,838 |
+| Keys | production — v0.1 trusted-setup ceremony |
+
+Ceremony record: [`reference/ceremony/CEREMONY_TRANSCRIPT.md`](reference/ceremony/CEREMONY_TRANSCRIPT.md)
+— 5 contributors, Bitcoin-beacon sealed, `ZKey Ok!`.
 
 ---
 
