@@ -354,7 +354,7 @@ main()
         ? "R+4 federation peer authentication: SOUND — mutating endpoints " +
             "require a signed request from a known peer; unknown, tampered, " +
             "stale and replayed requests are all rejected. (v1.0 hardening — " +
-            "TLS + peer auth landed; BFT consensus + persistence still ahead.)"
+            "TLS + peer auth + persistence landed; BFT consensus still ahead.)"
         : "R+4 federation peer authentication: FAILED — a check did not hold.",
     );
     process.exit(fail === 0 ? 0 : 1);

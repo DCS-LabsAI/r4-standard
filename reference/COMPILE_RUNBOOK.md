@@ -132,6 +132,21 @@ forge build   # or solc — just confirm the generated verifier compiles
 After step 4, record the constraint count and proof timing in the roadmap and
 flip R+4's "circuit compile" item to done.
 
+### Benchmarking (record reproducible numbers)
+
+Instead of timing the steps by hand, run the benchmark script — it captures the
+environment, times proof generation and verification, reads the constraint
+count, and writes `R4_BENCHMARK_RESULT.md`:
+
+```bash
+./scripts/r4-benchmark.sh                # times prove + verify (artifacts must exist)
+./scripts/r4-benchmark.sh --with-build   # also compiles the circuit and times build.sh
+```
+
+Paste `R4_BENCHMARK_RESULT.md` back so the figure goes into
+`rseries-hardening/RSERIES_BENCHMARKS.md`. The timings are dev-key, reference
+profile — report them as such, never as production trust.
+
 ---
 
 ## Important — dev keys vs production

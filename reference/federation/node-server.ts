@@ -12,20 +12,26 @@
 // runs it across a network, validating the sync / convergence / revocation
 // protocol over the wire.
 //
-// v1.0 HARDENING — IN PROGRESS. Two production-hardening pieces are now
-// available, both opt-in via NodeServerConfig:
+// v1.0 HARDENING — IN PROGRESS. Four production-hardening pieces are now
+// available, all opt-in via NodeServerConfig:
 //   - PEER AUTHENTICATION (config.auth) — when set, the mutating endpoints
 //     POST /manifest and POST /sync require an Ed25519-signed request from a
 //     listed peer (see peer-auth.ts). When unset, the node runs in legacy
 //     mode with a warning, exactly as the original prototype did.
 //   - TLS (config.tls) — when set, the node serves HTTPS instead of plaintext
 //     HTTP.
+//   - PERSISTENCE (config.statePath) — when set, every adopted manifest is
+//     written to disk and the node boots from the persisted manifest after a
+//     restart instead of reverting to its initial manifest (see
+//     persistence.ts). When unset, the node keeps no disk state.
+//   - SYNC TIMEOUT (config.syncTimeoutMs) — every peer fetch in POST /sync is
+//     bounded by an AbortController, so a hung peer cannot stall a sync round.
 //
 // STILL OUT OF SCOPE (remaining v1.0 work):
 //   - production-grade Byzantine-fault-tolerant consensus — the manifest is
 //     still minted by a single trusted authority key
-//   - persistence — no on-disk state; the replay ledger is in-memory and does
-//     not survive a restart
+//   - replay-ledger persistence — peer-auth replay protection still resets on
+//     restart (bounded by the peer-auth timestamp window)
 //   - retry/backoff, partition handling, rate limiting
 //   - it is NOT deployed anywhere
 //
@@ -56,6 +62,12 @@ import {
   ReplayLedger,
   type PeerAuthConfig,
 } from "./peer-auth.js";
+import {
+  fileStore,
+  memoryStore,
+  chooseBootManifest,
+  type NodeStore,
+} from "./persistence.js";
 
 // @noble/ed25519 v3 needs sha512 wired in for sync APIs.
 ed.hashes.sha512 = (...m) => sha512(ed.etc.concatBytes(...m));
@@ -89,6 +101,18 @@ export interface NodeServerConfig {
    * HTTP. `cert` and `key` are PEM strings.
    */
   tls?: { cert: string; key: string };
+  /**
+   * Optional persistence directory. When present the node persists every
+   * manifest it adopts and, on restart, boots from the persisted manifest if
+   * it is newer than `initialManifest`. When absent the node keeps no disk
+   * state (original prototype behaviour).
+   */
+  statePath?: string;
+  /**
+   * Per-peer timeout (ms) for the manifest fetch during POST /sync. Defaults
+   * to 5000. Guarantees a hung peer cannot stall a sync round.
+   */
+  syncTimeoutMs?: number;
 }
 
 export interface RunningNode {
@@ -120,6 +144,28 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown): void
   res.end(payload);
 }
 
+/**
+ * Fetch a peer's /manifest with a hard timeout. Without this, a hung or
+ * black-holed peer would block a /sync round indefinitely; the AbortController
+ * guarantees every peer fetch settles within `timeoutMs`.
+ */
+async function fetchPeerManifest(
+  peer: string,
+  timeoutMs: number,
+): Promise<SignedManifest> {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const r = await fetch(peer.replace(/\/$/, "") + "/manifest", {
+      signal: ac.signal,
+    });
+    if (!r.ok) throw new Error(`http_${r.status}`);
+    return (await r.json()) as SignedManifest;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // ── server ───────────────────────────────────────────────────────────────────
 
 /**
@@ -138,10 +184,28 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown): void
  *   GET  /health    — liveness probe; reports auth/tls mode (open)
  */
 export function startNode(config: NodeServerConfig): Promise<RunningNode> {
+  // Persistence — survive a restart. With no statePath the store is a no-op
+  // and the node behaves exactly like the original in-memory prototype.
+  const store: NodeStore = config.statePath
+    ? fileStore(config.statePath)
+    : memoryStore;
+  const boot = chooseBootManifest(
+    store,
+    config.initialManifest,
+    config.authorityPk,
+  );
+  if (boot.restored) {
+    console.log(
+      `[node-server] ${config.node_id}: restored manifest ` +
+        `v${boot.manifest.version} from ${config.statePath} ` +
+        `(initial was v${config.initialManifest.version})`,
+    );
+  }
+
   const fed: FederationNode = makeNode(
     config.node_id,
     config.authorityPk,
-    config.initialManifest,
+    boot.manifest,
   );
 
   const getVk: GetVerifyingKey = config.getVerifyingKey ?? (() => null);
@@ -198,6 +262,7 @@ export function startNode(config: NodeServerConfig): Promise<RunningNode> {
           version: fed.current.version,
           auth: config.auth ? "enforced" : "legacy",
           tls: config.tls ? true : false,
+          persistence: config.statePath ? true : false,
           ok: true,
         });
       }
@@ -219,6 +284,7 @@ export function startNode(config: NodeServerConfig): Promise<RunningNode> {
         }
         const before = fed.current.version;
         const decision = adopt(fed, candidate);
+        if (decision.adopted) store.saveManifest(fed.current);
         return sendJson(res, decision.adopted ? 200 : 409, {
           adopted: decision.adopted,
           reason: decision.reason,
@@ -261,20 +327,23 @@ export function startNode(config: NodeServerConfig): Promise<RunningNode> {
         const fetched: { peer: string; version?: number; error?: string }[] = [];
         const candidates: SignedManifest[] = [];
 
+        const timeoutMs = config.syncTimeoutMs ?? 5000;
         for (const peer of config.peers) {
           try {
-            const r = await fetch(peer.replace(/\/$/, "") + "/manifest");
-            if (!r.ok) {
-              fetched.push({ peer, error: `http_${r.status}` });
-              continue;
-            }
-            const m = (await r.json()) as SignedManifest;
+            const m = await fetchPeerManifest(peer, timeoutMs);
             fetched.push({ peer, version: m?.version });
             candidates.push(m);
           } catch (e) {
+            const aborted =
+              e instanceof Error &&
+              (e.name === "AbortError" || e.name === "TimeoutError");
             fetched.push({
               peer,
-              error: e instanceof Error ? e.message : String(e),
+              error: aborted
+                ? "timeout"
+                : e instanceof Error
+                  ? e.message
+                  : String(e),
             });
           }
         }
@@ -297,6 +366,7 @@ export function startNode(config: NodeServerConfig): Promise<RunningNode> {
           }
           reason = d.reason;
         }
+        if (adopted) store.saveManifest(fed.current);
         return sendJson(res, 200, {
           node_id: fed.node_id,
           peersContacted: fetched,

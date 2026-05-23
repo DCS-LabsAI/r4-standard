@@ -9,10 +9,10 @@ HTTP.
 > *functional* multi-node networked prototype — real separate processes
 > talking over real HTTP, validating the sync / convergence / revocation
 > protocol across a network. **v1.0 hardening is in progress:** optional peer
-> authentication and TLS have landed (see "What is and isn't production-ready"
-> below); Byzantine-fault-tolerant consensus, persistence and deployment have
-> not. It is **not** production-hardened and **not** deployed. Do not call it
-> "production" or "v1.0 complete".
+> authentication, TLS, manifest persistence and a sync timeout have landed (see
+> "What is and isn't production-ready" below); Byzantine-fault-tolerant
+> consensus and deployment have not. It is **not** production-hardened and
+> **not** deployed. Do not call it "production" or "v1.0 complete".
 
 ## What a node is
 
@@ -49,6 +49,8 @@ const node = await startNode({
     authorizedPeers: [{ node_id: "node-2", publicKey: peer2Pk }],
   },
   tls: { cert, key },          // optional — serve HTTPS instead of HTTP
+  statePath: "./node-state",   // optional — persist adopted manifest to disk
+  syncTimeoutMs: 5000,         // optional — per-peer fetch timeout in /sync
 });
 // ... later
 await node.close();
@@ -104,6 +106,15 @@ file on exit. Last observed run: **13 passed, 0 failed**.
   `test/peer-auth.test.ts` (`npm run test:federation:auth`).
 - **TLS** — when a node is started with a `tls: { cert, key }` config it
   serves HTTPS instead of plaintext HTTP.
+- **Manifest persistence** (`persistence.ts`) — when a node is started with a
+  `statePath`, every adopted manifest is written to disk atomically, and on
+  restart the node boots from the persisted manifest (if newer and validly
+  signed) instead of reverting to its initial manifest. A persisted manifest
+  that fails the signature check is ignored. Tested by `test/persistence.test.ts`
+  (`npm run test:federation:persistence`).
+- **Sync timeout** — every peer fetch in `POST /sync` is bounded by
+  `syncTimeoutMs` (default 5000) via an `AbortController`, so a hung peer is
+  reported as `timeout` and can never stall a sync round.
 
 When `auth` is omitted the node runs in legacy mode (a warning is logged) and
 mutating endpoints are open, exactly as the original prototype — which is why
@@ -114,9 +125,10 @@ mutating endpoints are open, exactly as the original prototype — which is why
 - **No production-grade Byzantine fault tolerance / consensus** — the manifest
   is still minted by a single trusted authority key; adoption is the strict
   version-chain rule, nothing more.
-- **No persistence** — node state is in-memory; a restart loses it. The
-  peer-auth replay ledger is also in-memory, so replay protection does not
-  survive a restart.
+- **No replay-ledger persistence** — the adopted manifest now survives a
+  restart (`statePath`), but the peer-auth replay ledger is still in-memory, so
+  replay protection resets on restart (bounded by the peer-auth timestamp
+  window).
 - **No retry/backoff, no partition or liveness handling, no rate limiting.**
 - **Not deployed** anywhere.
 
