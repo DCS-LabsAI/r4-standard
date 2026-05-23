@@ -10,6 +10,9 @@
     "test": "node test/witness-test.mjs",
     "test:federation": "tsx federation/test/federation.test.ts",
     "test:federation:e2e": "tsx federation/test/cross-issuer-e2e.test.ts",
+    "test:federation:sync": "tsx federation/test/sync.test.ts",
+    "test:federation:multinode": "tsx federation/test/multinode.test.ts",
+    "test:federation:auth": "tsx federation/test/peer-auth.test.ts",
     "sim:federation": "tsx federation/multi-issuer-sim.ts",
     "gen-example": "node scripts/gen-example-bundle.mjs"
   },

@@ -7,27 +7,33 @@
 // --------------------------
 // This is the R+4 FEDERATION MULTI-NODE PROTOTYPE. It is a FUNCTIONAL
 // multi-node networked prototype: real separate OS processes, each an
-// independent HTTP server, communicating over real HTTP via fetch. It takes
-// the previously single-process federation logic (manifest.ts / sync.ts /
-// cross-issuer.ts) and runs it across a network, validating the
-// sync / convergence / revocation protocol over the wire.
+// independent HTTP(S) server, communicating over real HTTP via fetch. It
+// takes the federation logic (manifest.ts / sync.ts / cross-issuer.ts) and
+// runs it across a network, validating the sync / convergence / revocation
+// protocol over the wire.
 //
-// It is NOT production-hardened. Explicitly OUT OF SCOPE:
-//   - no TLS / HTTPS — all traffic is plaintext HTTP on localhost
-//   - no peer authentication — any client can POST to /manifest or /sync
-//   - no production-grade Byzantine fault tolerance / consensus — the
-//     manifest is still minted by a single trusted authority key, and
-//     adoption is the strict version-chain rule from sync.ts, nothing more
-//   - no persistence, no replay protection across restarts
-//   - no retry/backoff, partition handling, rate limiting, or auth tokens
+// v1.0 HARDENING — IN PROGRESS. Two production-hardening pieces are now
+// available, both opt-in via NodeServerConfig:
+//   - PEER AUTHENTICATION (config.auth) — when set, the mutating endpoints
+//     POST /manifest and POST /sync require an Ed25519-signed request from a
+//     listed peer (see peer-auth.ts). When unset, the node runs in legacy
+//     mode with a warning, exactly as the original prototype did.
+//   - TLS (config.tls) — when set, the node serves HTTPS instead of plaintext
+//     HTTP.
+//
+// STILL OUT OF SCOPE (remaining v1.0 work):
+//   - production-grade Byzantine-fault-tolerant consensus — the manifest is
+//     still minted by a single trusted authority key
+//   - persistence — no on-disk state; the replay ledger is in-memory and does
+//     not survive a restart
+//   - retry/backoff, partition handling, rate limiting
 //   - it is NOT deployed anywhere
 //
-// Do not call this "production" or "v1.0 complete". It is the federation
-// multi-node prototype: enough to prove the protocol works across real
-// processes over real HTTP. See federation/MULTINODE.md.
+// Do not call this "production" or "v1.0 complete". See federation/MULTINODE.md.
 // ===========================================================================
 
 import * as http from "node:http";
+import * as https from "node:https";
 import { sha512 } from "@noble/hashes/sha2.js";
 import * as ed from "@noble/ed25519";
 
@@ -45,6 +51,11 @@ import {
   type R4ProofObject,
   type GetVerifyingKey,
 } from "./cross-issuer.js";
+import {
+  verifyRequest,
+  ReplayLedger,
+  type PeerAuthConfig,
+} from "./peer-auth.js";
 
 // @noble/ed25519 v3 needs sha512 wired in for sync APIs.
 ed.hashes.sha512 = (...m) => sha512(ed.etc.concatBytes(...m));
@@ -66,14 +77,26 @@ export interface NodeServerConfig {
    * is process-local; a real deployment would fetch vks from a registry.
    */
   getVerifyingKey?: GetVerifyingKey;
+  /**
+   * Optional peer authentication. When present, the mutating endpoints
+   * (POST /manifest, POST /sync) require an Ed25519-signed request from a
+   * listed peer. When absent the node runs in legacy/prototype mode (a
+   * warning is logged) and accepts unauthenticated mutating requests.
+   */
+  auth?: PeerAuthConfig;
+  /**
+   * Optional TLS. When present the node serves HTTPS instead of plaintext
+   * HTTP. `cert` and `key` are PEM strings.
+   */
+  tls?: { cert: string; key: string };
 }
 
 export interface RunningNode {
-  server: http.Server;
+  server: http.Server | https.Server;
   /** The in-memory FederationNode (its `.current` is the live manifest). */
   fed: FederationNode;
   config: NodeServerConfig;
-  /** Stop the HTTP server and free the port. */
+  /** Stop the server and free the port. */
   close: () => Promise<void>;
 }
 
@@ -100,20 +123,19 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown): void
 // ── server ───────────────────────────────────────────────────────────────────
 
 /**
- * Start one federation node as a real HTTP server.
+ * Start one federation node as a real HTTP(S) server.
  *
- * A node is started with: a federation authority key it trusts, an initial
- * signed manifest, a port, and a peer list. The node holds its current
- * manifest in memory (via the FederationNode from sync.ts) and exposes:
- *
- *   GET  /manifest  — this node's current signed manifest
+ * The node exposes:
+ *   GET  /manifest  — this node's current signed manifest (open)
  *   POST /manifest  — receive a peer's manifest; verify sig + version chain;
- *                     adopt iff strictly-higher valid version (sync.ts rule)
+ *                     adopt iff strictly-higher valid version (sync.ts rule).
+ *                     MUTATING — peer-authenticated when config.auth is set.
  *   POST /verify    — receive a cross-issuer proof; run verifyCrossIssuerProof
- *                     against the current manifest; return {ok, reason}
- *   GET  /peers     — list configured peer URLs
- *   POST /sync      — fetch /manifest from every peer, adopt the highest valid
- *   GET  /health    — liveness probe (prototype convenience)
+ *                     against the current manifest (open — read-only)
+ *   GET  /peers     — list configured peer URLs (open)
+ *   POST /sync      — fetch /manifest from every peer, adopt the highest valid.
+ *                     MUTATING — peer-authenticated when config.auth is set.
+ *   GET  /health    — liveness probe; reports auth/tls mode (open)
  */
 export function startNode(config: NodeServerConfig): Promise<RunningNode> {
   const fed: FederationNode = makeNode(
@@ -122,12 +144,41 @@ export function startNode(config: NodeServerConfig): Promise<RunningNode> {
     config.initialManifest,
   );
 
-  const getVk: GetVerifyingKey =
-    config.getVerifyingKey ?? (() => null);
+  const getVk: GetVerifyingKey = config.getVerifyingKey ?? (() => null);
 
-  const server = http.createServer(async (req, res) => {
+  // Per-node replay ledger for peer-authenticated requests.
+  const replayLedger = new ReplayLedger();
+  if (!config.auth) {
+    console.warn(
+      `[node-server] ${config.node_id}: peer authentication DISABLED ` +
+        `(no config.auth) — legacy/prototype mode; mutating endpoints are open.`,
+    );
+  }
+
+  /**
+   * Gate a mutating request. Returns null when the request is allowed, or a
+   * rejection reason. In legacy mode (no config.auth) every request is allowed.
+   */
+  function gate(
+    method: string,
+    path: string,
+    raw: string,
+    headers: http.IncomingHttpHeaders,
+  ): { reason: string } | null {
+    if (!config.auth) return null; // legacy/prototype mode
+    const r = verifyRequest(method, path, raw, headers, config.auth, replayLedger);
+    return r.ok ? null : { reason: r.reason };
+  }
+
+  const handler = async (
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> => {
     const method = req.method ?? "GET";
     const url = (req.url ?? "/").split("?")[0];
+    // Read the body once for any POST, so it is available both to the auth
+    // check (which signs over the body) and to the route logic.
+    const raw = method === "POST" ? await readBody(req) : "";
 
     try {
       // ── GET /manifest ───────────────────────────────────────────────────
@@ -145,16 +196,21 @@ export function startNode(config: NodeServerConfig): Promise<RunningNode> {
         return sendJson(res, 200, {
           node_id: fed.node_id,
           version: fed.current.version,
+          auth: config.auth ? "enforced" : "legacy",
+          tls: config.tls ? true : false,
           ok: true,
         });
       }
 
-      // ── POST /manifest ──────────────────────────────────────────────────
+      // ── POST /manifest  (MUTATING — peer-authenticated) ─────────────────
       // Receive a manifest from a peer. Verify signature + version chain via
       // adopt() (the sync.ts rule): adopt ONLY a strictly-higher valid
       // version that chains correctly. Otherwise keep the current manifest.
       if (method === "POST" && url === "/manifest") {
-        const raw = await readBody(req);
+        const denied = gate(method, url, raw, req.headers);
+        if (denied) {
+          return sendJson(res, 401, { adopted: false, reason: denied.reason });
+        }
         let candidate: SignedManifest;
         try {
           candidate = JSON.parse(raw);
@@ -171,10 +227,10 @@ export function startNode(config: NodeServerConfig): Promise<RunningNode> {
         });
       }
 
-      // ── POST /verify ────────────────────────────────────────────────────
+      // ── POST /verify  (read-only — NOT authenticated) ───────────────────
       // Run §8.2 cross-issuer verification against the CURRENT manifest.
+      // Verification is non-mutating and discloses nothing, so it is open.
       if (method === "POST" && url === "/verify") {
-        const raw = await readBody(req);
         let proof: R4ProofObject;
         try {
           proof = JSON.parse(raw);
@@ -194,10 +250,14 @@ export function startNode(config: NodeServerConfig): Promise<RunningNode> {
         });
       }
 
-      // ── POST /sync ──────────────────────────────────────────────────────
+      // ── POST /sync  (MUTATING — peer-authenticated) ─────────────────────
       // Trigger a sync round: fetch /manifest from every peer, then adopt the
       // highest valid one. Convergence over the real network.
       if (method === "POST" && url === "/sync") {
+        const denied = gate(method, url, raw, req.headers);
+        if (denied) {
+          return sendJson(res, 401, { adopted: false, reason: denied.reason });
+        }
         const fetched: { peer: string; version?: number; error?: string }[] = [];
         const candidates: SignedManifest[] = [];
 
@@ -255,7 +315,14 @@ export function startNode(config: NodeServerConfig): Promise<RunningNode> {
         detail: e instanceof Error ? e.message : String(e),
       });
     }
-  });
+  };
+
+  const server: http.Server | https.Server = config.tls
+    ? https.createServer(
+        { cert: config.tls.cert, key: config.tls.key },
+        handler,
+      )
+    : http.createServer(handler);
 
   return new Promise((resolve, reject) => {
     server.once("error", reject);
@@ -278,11 +345,10 @@ export function startNode(config: NodeServerConfig): Promise<RunningNode> {
 //   tsx federation/node-server.ts --config <path-to-json>
 //
 // The config JSON must contain { node_id, authorityPk, initialManifest,
-// port, peers }. (getVerifyingKey cannot cross a process boundary, so a
-// CLI-launched node uses a null resolver — /verify still runs the §8.2
-// federation gate; the Groth16 step then reports vk_unavailable, which is a
-// correct structured result.) The multi-node test below drives nodes via a
-// config file so it can spawn real `tsx node-server.ts` processes.
+// port, peers }, and may contain { auth, tls }. (getVerifyingKey cannot cross
+// a process boundary, so a CLI-launched node uses a null resolver — /verify
+// still runs the §8.2 federation gate; the Groth16 step then reports
+// vk_unavailable, which is a correct structured result.)
 
 async function cliMain(): Promise<void> {
   const args = process.argv.slice(2);
@@ -295,8 +361,10 @@ async function cliMain(): Promise<void> {
   const cfg = JSON.parse(fs.readFileSync(args[idx + 1], "utf8")) as NodeServerConfig;
   const node = await startNode(cfg);
   console.log(
-    `[node-server] ${cfg.node_id} listening on http://127.0.0.1:${cfg.port} ` +
-      `(v${node.fed.current.version}, ${cfg.peers.length} peers)`,
+    `[node-server] ${cfg.node_id} listening on ` +
+      `${cfg.tls ? "https" : "http"}://127.0.0.1:${cfg.port} ` +
+      `(v${node.fed.current.version}, ${cfg.peers.length} peers, ` +
+      `auth=${cfg.auth ? "enforced" : "legacy"})`,
   );
   // signal readiness to a parent process watching stdout.
   console.log(`[node-server] READY ${cfg.node_id}`);

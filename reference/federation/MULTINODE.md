@@ -8,8 +8,11 @@ HTTP.
 > **Honesty notice.** This is the **federation multi-node prototype**. It is a
 > *functional* multi-node networked prototype — real separate processes
 > talking over real HTTP, validating the sync / convergence / revocation
-> protocol across a network. It is **not** production-hardened and **not**
-> deployed. Do not call it "production" or "v1.0 complete".
+> protocol across a network. **v1.0 hardening is in progress:** optional peer
+> authentication and TLS have landed (see "What is and isn't production-ready"
+> below); Byzantine-fault-tolerant consensus, persistence and deployment have
+> not. It is **not** production-hardened and **not** deployed. Do not call it
+> "production" or "v1.0 complete".
 
 ## What a node is
 
@@ -19,10 +22,10 @@ signed federation manifest in memory and exposes:
 | Method & path  | Behaviour |
 |----------------|-----------|
 | `GET  /manifest` | Return this node's current signed manifest. |
-| `POST /manifest` | Receive a peer's manifest; verify signature + version chain; adopt **only** if it is a strictly-higher valid version that chains correctly (the `adopt()` rule from `sync.ts`). Otherwise the node keeps its current manifest. |
-| `POST /verify`   | Receive a cross-issuer proof object; run `verifyCrossIssuerProof` (R+4 §8.2) against the current manifest; return `{ok, reason}`. |
+| `POST /manifest` | Receive a peer's manifest; verify signature + version chain; adopt **only** if it is a strictly-higher valid version that chains correctly (the `adopt()` rule from `sync.ts`). Otherwise the node keeps its current manifest. **Mutating — peer-authenticated when `auth` is configured.** |
+| `POST /verify`   | Receive a cross-issuer proof object; run `verifyCrossIssuerProof` (R+4 §8.2) against the current manifest; return `{ok, reason}`. Read-only — open. |
 | `GET  /peers`    | List configured peer URLs. |
-| `POST /sync`     | Trigger a sync round: fetch `/manifest` from every peer and adopt the highest valid one (convergence over the network). |
+| `POST /sync`     | Trigger a sync round: fetch `/manifest` from every peer and adopt the highest valid one (convergence over the network). **Mutating — peer-authenticated when `auth` is configured.** |
 | `GET  /health`   | Liveness probe (prototype convenience). |
 
 A node is started with: a federation authority key it trusts, an initial
@@ -42,6 +45,10 @@ const node = await startNode({
   port: 7401,
   peers: ["http://127.0.0.1:7402", "http://127.0.0.1:7403"],
   getVerifyingKey,             // optional resolver for /verify
+  auth: {                      // optional — enforce peer authentication
+    authorizedPeers: [{ node_id: "node-2", publicKey: peer2Pk }],
+  },
+  tls: { cert, key },          // optional — serve HTTPS instead of HTTP
 });
 // ... later
 await node.close();
@@ -87,18 +94,30 @@ file on exit. Last observed run: **13 passed, 0 failed**.
 - The sync / convergence / fork-rejection / revocation protocol behaves
   correctly across the network.
 
-**Out of scope — NOT production-ready:**
+**v1.0 hardening — landed (opt-in):**
 
-- **No TLS** — all traffic is plaintext HTTP on localhost.
-- **No peer authentication** — any client can POST to `/manifest` or `/sync`.
-  (Forged *manifests* are still rejected by signature checks, but the
-  endpoints themselves are unauthenticated.)
+- **Peer authentication** (`peer-auth.ts`) — when a node is started with an
+  `auth` config, the mutating endpoints `POST /manifest` and `POST /sync`
+  require an Ed25519-signed request from a listed peer. Unknown-signer,
+  tampered, clock-skewed and replayed requests are all rejected. `POST /verify`
+  and the GET endpoints stay open (read-only). Tested by
+  `test/peer-auth.test.ts` (`npm run test:federation:auth`).
+- **TLS** — when a node is started with a `tls: { cert, key }` config it
+  serves HTTPS instead of plaintext HTTP.
+
+When `auth` is omitted the node runs in legacy mode (a warning is logged) and
+mutating endpoints are open, exactly as the original prototype — which is why
+`multinode.test.ts` still passes unchanged.
+
+**Still out of scope — NOT production-ready:**
+
 - **No production-grade Byzantine fault tolerance / consensus** — the manifest
   is still minted by a single trusted authority key; adoption is the strict
   version-chain rule, nothing more.
-- **No persistence** — node state is in-memory; restart loses it.
-- **No replay protection across restarts, no retry/backoff, no partition or
-  liveness handling, no rate limiting.**
+- **No persistence** — node state is in-memory; a restart loses it. The
+  peer-auth replay ledger is also in-memory, so replay protection does not
+  survive a restart.
+- **No retry/backoff, no partition or liveness handling, no rate limiting.**
 - **Not deployed** anywhere.
 
-Closing these gaps is future work toward a production federation network.
+Closing these gaps is the remaining work toward a production federation network.
