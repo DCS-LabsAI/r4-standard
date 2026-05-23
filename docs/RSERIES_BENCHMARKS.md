@@ -59,6 +59,7 @@ typically favourably for CPU-bound work. Each such row is tagged
 | Bundle build time | R+3 | 10: 0.59 ms · 100: 1.09 ms · 1k: 6.06 ms · 10k: 59.9 ms (p50) | *(measured: 23 May 2026, workspace VM)* Throwaway tsx timing script over `buildBundle` (SHA-256 binary Merkle tree + one Ed25519 header signature) on synthetic receipt sets. 30 runs each (10 runs at n=10k), warm. p95 at n=10k ~102 ms. Scales roughly linearly in receipt count. |
 | Merkle inclusion-proof generation time | R+3 | ~0.004–0.015 ms per proof (p50, n=10 to 10k) | *(measured: 23 May 2026, workspace VM)* `proveInclusion` over a pre-built tree, 200 proofs per size. Sub-millisecond and O(log n); p50 0.0042 ms at n=10, 0.0145 ms at n=10k. |
 | Merkle inclusion-proof verification time | R+3 | ~0.009–0.025 ms per proof (p50, n=10 to 10k) | *(measured: 23 May 2026, workspace VM)* `verifyInclusion` against a known root, 200 proofs per size. p50 0.0093 ms at n=10, 0.0245 ms at n=10k; p95 ≤ 0.028 ms. |
+| Proof generation time (one proof) — **upper bound** | R+4 | ≈16 min 37 s wall-clock (≈997 s) | *(measured: 23 May 2026, founder's Mac, **development keys**)* One `npm run prove` over `example-bundle.json` for `threshold-count.circom` (1,197,221 constraints): `141.6 s user + 22.9 s system` CPU, **16:37.28 total**. Critically, CPU utilisation was only **~16%** — the run was **memory/IO-bound**, not compute-bound: loading the ~581 MB proving key plus witness generation dominated wall-clock. This is therefore an **upper bound**, not a representative proving figure; a proving profile with adequate RAM headroom would very likely be far faster. The same run earlier OOM-killed on the 3.9 GB workspace VM. |
 
 **Notes on interpretation:**
 
@@ -87,7 +88,7 @@ What remains below is genuinely unmeasured.
 |---|---|---|---|---|
 | Receipt sign latency — p50/p95/p99 in isolation | R+2 | The §2 figure is a mean derived from a single 10k-receipt scale run. Still to do: time the signing operation in isolation and report median and tail (p50/p95/p99) over ≥30 repeats. | Reference server profile (see §4). | TO MEASURE |
 | Bundle build/verify — p99 tail on reference hardware | R+3 | §2 records p50/p95 from the workspace VM. Still to do: repeat on the reference server profile and report p99. | Reference server profile. | TO MEASURE |
-| Proof generation time (production scale) | R+4 | Time full witness generation + Groth16 proving for `threshold-count.circom` using **production keys**, at production input sizes. | Reference proving profile — high-core-count CPU with sufficient RAM; record exact spec. | TO MEASURE — *attempted 23 May 2026 on the workspace VM with development keys and `example-bundle.json`; the prover was OOM-killed (exit 137, peak RSS ~3.6 GB on a ~3.9 GB VM). Proving the 1.2M-constraint circuit exceeds this VM's memory. Needs the reference proving profile.* |
+| Proof generation time (production scale) | R+4 | Time full witness generation + Groth16 proving for `threshold-count.circom` using **production keys**, at production input sizes. | Reference proving profile — high-core-count CPU with sufficient RAM; record exact spec. | PARTIALLY MEASURED — *a first run is now in §2: ≈16 min 37 s on the founder's Mac with development keys. That run was memory-bound (~16% CPU), so it is an upper bound only. Still TO DO: a run on a named reference proving profile (recorded high-RAM spec) with production (ceremony) keys, to obtain a representative figure. The earlier 23 May attempt OOM-killed on the 3.9 GB workspace VM.* |
 | Proof verification time (reproduced) | R+4 | Run `npm run verify` against a freshly generated proof. | Reference client profile. | TO MEASURE — *could not run on 23 May 2026: no proof artifact was produced because proof generation was OOM-killed (see row above). The existing ~144 ms §2 figure stands as the only verification measurement.* |
 | Proof generation memory footprint | R+4 | Record peak resident memory during witness generation and proving. | Same proving profile as above. | TO MEASURE — *partial observation 23 May 2026: peak RSS reached ~3.6 GB before the OOM kill on the workspace VM, so true peak is higher and unmeasured. Needs a profile with adequate RAM.* |
 | End-to-end throughput | R+2 / R+3 / R+4 | Drive the full pipeline (sign -> bundle -> prove -> verify) under sustained load; report receipts/second sustained and the bottleneck stage. | Reference server + proving profile. | TO MEASURE |
@@ -178,16 +179,21 @@ any published result, so a third party can reproduce it.
   ~0.20 ms and verifies one with the full chain check in ~0.857 ms; R+3 builds a
   10,000-receipt bundle in ~60 ms (p50); and R+3 Merkle inclusion proofs both
   generate and verify in well under 0.03 ms each, scaling logarithmically.
+- A first R+4 proof-generation run has been measured: ≈16 min 37 s wall-clock on
+  the founder's Mac with development keys (23 May 2026). This is stated as an
+  **upper bound** only — the run used just ~16% CPU, i.e. it was memory/IO-bound
+  (loading the ~581 MB proving key), not a representative compute time.
 
 **What is pending measurement:**
 
 - R+2 sign/verify p50/p95/p99 tail in isolation (the workspace-VM figures are a
   mean and p50/p95 from single scale runs, not isolated tail percentiles).
 - R+3 bundle build/verify p99 tail on the reference server profile.
-- R+4 proof generation time at production scale, with production keys, and its
-  memory footprint. (A 23 May 2026 attempt on the workspace VM was OOM-killed —
-  the 1.2M-constraint prover needs more RAM than that VM has — so no proof was
-  produced and proof verification could not be re-measured either.)
+- R+4 proof generation on a **named reference proving profile** (recorded
+  high-RAM spec) with **production (ceremony) keys**, plus its peak-memory
+  footprint. A first run is now measured — ≈16 min 37 s on the founder's Mac
+  with dev keys (see §2) — but it was memory-bound (~16% CPU) and is only an
+  upper bound, so a representative production figure is still outstanding.
 - End-to-end pipeline throughput and the location of the bottleneck.
 - Steady-state memory footprint of the signing and bundling services.
 - On-chain anchor latency and anchor gas cost on target chains.
