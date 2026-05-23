@@ -1,7 +1,7 @@
 # DCS Labs R-Series — Threat Model
 
-**Document status:** Formal threat model, v1.0
-**Date:** 2026-05-23
+**Document status:** Formal threat model, v1.1
+**Date:** 2026-05-23 (rev 1.1 — federation status updated from "specification only" to "working multi-node prototype")
 **Audience:** Internal security, external auditors, regulators
 **Subject:** The R-Series three-layer AI-agent trust stack (R+2, R+3, R+4)
 
@@ -17,7 +17,7 @@ This document is a formal threat model for the DCS Labs **R-Series**, a three-la
 
 The purpose of this document is to state, precisely and without overclaiming, **what each layer defends against, how, and what it does not defend against.** It is written so that an auditor or regulator can rely on it as an accurate account of the security posture.
 
-**Maturity disclosure.** R+2 and R+3 are **operational prototypes**: functional and deployed, but not hardened or independently audited. R+4 is a **real cryptographic prototype**: the proving circuit and verification are genuine and exercised, but the layer is not production-hardened. **R+4 federation — multi-issuer aggregation, cross-node synchronization, and Byzantine fault handling — is NOT implemented. It exists as specification only.** Every claim below is bounded by this maturity statement.
+**Maturity disclosure.** R+2 and R+3 are **operational prototypes**: functional and deployed, but not hardened or independently audited. R+4 is a **real cryptographic prototype**: the proving circuit and verification are genuine and exercised, but the layer is not production-hardened. **R+4 federation is now a working multi-node prototype** — multi-issuer aggregation, cross-node manifest synchronization and revocation propagation run across real node processes over HTTP and are exercised by a 13/13 multi-node test — **but it is NOT production-hardened: it has no TLS, no peer authentication, and no hardened Byzantine-fault-tolerant consensus.** Every claim below is bounded by this maturity statement.
 
 This document does **not** make any claim involving artificial general intelligence or post-quantum security. Ed25519 and BN254 are classical-security primitives and are treated as such throughout.
 
@@ -74,7 +74,7 @@ This section maps the R-Series against the **OWASP Top 10 for Agentic Applicatio
 
 ### 3.5 Cascading / multi-agent failures
 *A fault or compromise in one agent propagates across a multi-agent system.*
-**Coverage:** Detective only, and **incomplete**. R+2 chains link receipts per agent; R+3 can aggregate across agents into one bundle, supporting post-incident reconstruction. However, **cross-agent correlation depends on R+4 federation, which is NOT implemented.** The stack today cannot give a verified cross-node view of a cascading failure.
+**Coverage:** Detective only, and **incomplete**. R+2 chains link receipts per agent; R+3 can aggregate across agents into one bundle, supporting post-incident reconstruction. However, **cross-agent correlation depends on R+4 federation, which is a multi-node prototype, not production-hardened.** The federation prototype demonstrates cross-node manifest sync and revocation propagation, but without production-grade Byzantine fault tolerance the stack cannot yet give a *trustworthy* cross-node view of a cascading failure under adversarial nodes.
 
 ### 3.6 Rogue agents
 *An agent operates outside its sanctioned mandate.*
@@ -121,7 +121,7 @@ R+4 uses **Groth16 proofs over BN254** to prove compliance properties (e.g. "≥
 - **Proof replay / freshness.** A Groth16 proof is a fixed artifact; it can be replayed. R+4 proofs do **not** intrinsically bind to time or to a fresh challenge. Freshness must be imposed by including a nonce or epoch as a public input, which is **not currently enforced**.
 - **Curve-level attacks on BN254.** BN254 offers roughly **100–110 bits** of security against the best-known attacks (notably advances in the tower-NFS family), below the 128-bit level often assumed. This is a classical-cryptanalysis caveat, not a quantum one. It is adequate for a prototype but should be reviewed; migration to a higher-security curve is a known future item.
 - **Composition risk.** R+4 proves statements **about** R+2 receipts and R+3 bundles. It therefore **inherits every weakness of those layers**: it can faithfully prove a property of a corpus that was itself incomplete (§4.2) or built from false-but-signed receipts (§4.1). A valid R+4 proof attests to the *math over the inputs*, never to the *honesty of the inputs*.
-- **Federation.** The "Federated" in R+4 — multi-issuer proofs, cross-node synchronization, Byzantine fault handling — is **specified but NOT implemented.** Today R+4 operates over a single issuer's receipts and bundles. No multi-party or Byzantine guarantee exists.
+- **Federation.** Cross-issuer R+4 verification is now a **working multi-node prototype**: `node-server.ts` runs federation nodes as real HTTP processes, and a `multinode.test.ts` run spawned 3 real node processes that synced a federation manifest, propagated a revocation, and rejected forged manifests over HTTP (13/13). **It is not production-hardened** — no TLS, no peer authentication, and no hardened Byzantine-fault-tolerant consensus — so no Byzantine guarantee exists against a malicious or colluding node. Single-domain R+4 (one issuer) remains the only configuration with a live mainnet verifier.
 
 ---
 
@@ -150,7 +150,7 @@ There is currently **no automated revocation-propagation mechanism** across rely
 
 The following are explicitly **not mitigated** by the current R-Series and must not be assumed by any relying party:
 
-- **Federation Byzantine faults.** Multi-issuer aggregation, cross-node synchronization, and Byzantine fault tolerance are **specified but not implemented**. No guarantee exists against a faulty or malicious node in a federated deployment.
+- **Federation Byzantine faults.** Multi-issuer aggregation and cross-node synchronization are now implemented in a **multi-node prototype**, but **production-grade Byzantine fault tolerance is not**. No guarantee exists against a faulty or malicious node in a federated deployment; the prototype rejects forged manifests over HTTP but has not been hardened against a colluding or adversarial node.
 - **Completeness assertions.** No layer proves that *all* agent actions were receipted. The stack secures the receipts that exist; it cannot attest that none were withheld (§3.8, §4.2).
 - **Independent-node attestation.** There is no mechanism for one node to attest to the honest operation of another. R+4's "ZKey Ok" and the ceremony beacon attest to *ceremony correctness*, not to *node or contributor independence*.
 - **Adversarial-resilience testing.** No red-team exercise, fuzzing campaign, or independent security audit has been performed against any layer. Implementation-level vulnerabilities in the R+2/R+3 prototypes and in `threshold-count.circom` may exist and are unenumerated.
@@ -166,7 +166,7 @@ The following are explicitly **not mitigated** by the current R-Series and must 
 | 1 | Malicious signer mints false-but-valid receipts | R+2 | Non-repudiable attribution; no truth check | **High** |
 | 2 | Receipt omission / selective non-disclosure | R+2/R+3 | None — inclusion proven, completeness not | **High** |
 | 3 | Trusted-setup toxic waste (v0.1, family+internal cohort) | R+4 | 1-of-N honesty assumed; weak independence | **High** |
-| 4 | Federation Byzantine faults | R+4 | Not implemented — spec only | **High** |
+| 4 | Federation Byzantine faults | Federation | Multi-node prototype runs; production-grade BFT not implemented | **Medium-High** |
 | 5 | Key compromise → forged receipts/bundles | R+2/R+3 | On-chain revoke-and-rotate; no auto-detection | **Medium-High** |
 | 6 | Circuit soundness bug in `threshold-count.circom` | R+4 | Unaudited; assumed correct | **Medium-High** |
 | 7 | Replay of stale receipt/bundle/proof | All | Relying-party freshness checks required | **Medium** |
@@ -177,7 +177,7 @@ The following are explicitly **not mitigated** by the current R-Series and must 
 | 12 | BN254 sub-128-bit security margin | R+4 | Adequate for prototype; migration noted | **Low-Medium** |
 | 13 | Goal hijacking / tool misuse / memory poisoning | None | Out of scope — detective only at best | **Out of scope** |
 
-**Overall posture.** The R-Series provides strong **integrity, attribution, and post-hoc auditability** for agent actions that are recorded. Its principal residual risks are **completeness** (it cannot prove nothing was withheld), the **v0.1 trusted-setup independence assumption**, and the **partially-implemented federation layer**. R+2 and R+3 remain operational prototypes; R+4 is a real cryptographic prototype; none has been independently audited. This document should be revisited after a re-ceremony, an independent audit, and a full federation implementation.
+**Overall posture.** The R-Series provides strong **integrity, attribution, and post-hoc auditability** for agent actions that are recorded. Its principal residual risks are **completeness** (it cannot prove nothing was withheld), the **v0.1 trusted-setup independence assumption**, and the **not-yet-production-hardened federation layer**. R+2 and R+3 remain operational prototypes; R+4 is a real cryptographic prototype; federation is a working multi-node prototype; none has been independently audited. This document should be revisited after a re-ceremony, an independent audit, and federation production-hardening.
 
 ---
 
@@ -201,3 +201,10 @@ Two residual risks were surfaced and are recorded here:
 
 Neither is a cryptographic flaw — both are scope boundaries of the reference
 verifier. They are tracked for Phase 1.5 (verifier hardening).
+
+**Update (rev 1.1).** Both Phase 1.5 fixes have since been made: R+2 gained a
+nonce-uniqueness ledger (`verifyChain` / `NonceLedger`) and R+3 a mandatory
+predecessor-chain check (strict mode). The adversarial suites were re-run with
+the fixes in place: **R+2 10/10, R+3 12/12, R+4 10/10**. A federation
+multi-node adversarial/integration test (`multinode.test.ts`) was also added
+and passes 13/13.
