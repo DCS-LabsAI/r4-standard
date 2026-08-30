@@ -1,3 +1,23 @@
+> # ⚠ HISTORICAL — this repository documents the **May 2026** R+4 circuit
+>
+> **Everything in this repository — the circuit, the ceremony transcript, the deployed Base mainnet
+> verifier, the benchmarks and the example artefacts — describes the original circuit of May 2026
+> and the trusted setup performed for it. It is published as an accurate record of what was done,
+> and it is preserved unedited.**
+>
+> **It is not a current production system, and nothing here should be adopted as one.** Defects
+> were found in that circuit during internal review and were repaired in August 2026 in a new
+> circuit. The repaired circuit is **not published**, has **no trusted setup**, and therefore has
+> no ceremony, no verifying key and no deployed verifier. See **[`ERRATUM_2026-08-28.md`](ERRATUM_2026-08-28.md)**.
+>
+> The Groth16 verifier deployed on Base mainnet covers the **original** circuit. Its source is not
+> yet verified on the block explorer.
+>
+> No layer of the R-Series may be described as *production* — see
+> [`docs/RSERIES_TERMINOLOGY.md`](docs/RSERIES_TERMINOLOGY.md). Where text below says otherwise, this
+> banner governs. **Nothing below has been deleted or rewritten; this banner is added, not
+> substituted.**
+
 # R+4 — Federated Zero-Knowledge Verification Standard
 
 [![Spec](https://img.shields.io/badge/spec-r%2B4%2Fv0.1-blue)](https://dcslabs.ai/standard/r4)

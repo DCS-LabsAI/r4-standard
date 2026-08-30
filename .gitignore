@@ -5,3 +5,12 @@ reference/build/
 reference/*.ptau
 *.zkey
 *.log
+
+# WITHHELD PENDING EXTERNAL REVIEW (P0-8, 30 Aug 2026) — exploit proof artefacts for the
+# original R+4 circuit. They demonstrate the defects described in ERRATUM_2026-08-28.md and
+# must not enter this repository. These lines are a control, not a note: without them an
+# accidental `git add .` would stage the files silently.
+proof_attack_amount_neg1.json
+proof_thr0.json
+**/proof_attack_amount_neg1.json
+**/proof_thr0.json
